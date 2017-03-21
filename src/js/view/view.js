@@ -1,11 +1,12 @@
 define([
-    'utils/helpers',
-    'utils/underscore',
     'events/events',
     'events/states',
     'utils/backbone.events',
+    'utils/helpers',
+    'utils/underscore',
+    'utils/active-tab',
     'utils/constants',
-    'utils/activeTab',
+    'utils/request-animation-frame',
     'view/breakpoint',
     'view/captionsrenderer',
     'view/logo',
@@ -15,7 +16,7 @@ define([
     'view/preview',
     'view/title',
     'templates/player.html',
-], function(utils, _, events, states, Events, Constants, activeTab, setBreakpoint, CaptionsRenderer, Logo,
+], function(events, states, Events, utils, _, activeTab, Constants, raf, setBreakpoint, CaptionsRenderer, Logo,
 
             button,
 
@@ -31,71 +32,59 @@ define([
         'MSFullscreenChange'
     ];
 
+    // These must be assigned to variables to avoid illegal invocation
+    var requestAnimationFrame = raf.requestAnimationFrame;
+    var cancelAnimationFrame = raf.cancelAnimationFrame;
+
     return function View(_api, _model) {
-        var _playerElement;
-        var _controls;
+        var _this = _.extend(this, Events, {
+            isSetup: false,
+            api: _api,
+            model: _model
+        });
+
+        var _playerElement = utils.createElement(playerTemplate({ id: _model.get('id') }));
         var _videoLayer;
+        var _preview;
+        var _title;
+        var _captionsRenderer;
+        var _controls;
+        var _logo;
+
+        var _mute;
+
+        var _playerState;
+
         var _lastWidth;
         var _lastHeight;
+
         var _instreamModel;
-        var _preview;
-        var _castDisplay;
-        var _logo;
-        var _title;
-        var _mute;
-        var _captionsRenderer;
+
         var _resizeMediaTimeout = -1;
         var _resizeContainerRequestId = -1;
-        var _requestFrame = window.requestAnimationFrame ||
-            function (rafFunc) {
-                return window.setTimeout(rafFunc, 17);
-            };
-        var _cancelDelayResize = window.cancelAnimationFrame || window.clearTimeout;
         var _previewDisplayStateTimeout = -1;
-        var _currentState;
-        var _originalContainer;
-        var _requestFullscreen;
-        var _exitFullscreen;
-        var _elementSupportsFullscreen = false;
+
+        var _requestFullscreen =
+            _playerElement.requestFullscreen ||
+            _playerElement.webkitRequestFullscreen ||
+            _playerElement.webkitRequestFullScreen ||
+            _playerElement.mozRequestFullScreen ||
+            _playerElement.msRequestFullscreen;
+        var _exitFullscreen =
+            document.exitFullscreen ||
+            document.webkitExitFullscreen ||
+            document.webkitCancelFullScreen ||
+            document.mozCancelFullScreen ||
+            document.msExitFullscreen;
+        var _elementSupportsFullscreen = !!(_requestFullscreen && _exitFullscreen);
+
         var _focusFromClick = false;
-        var _canvasColorContext;
-        var _this = _.extend(this, Events);
 
         // Include the separate chunk that contains the @font-face definition.  Check webpackJsonjwplayer so we don't
         // run this in phantomjs because it breaks despite it working in browser and including files like we want it to.
         if (window.webpackJsonpjwplayer) {
             require('css/jwplayer.less');
         }
-
-        this.model = _model;
-        this.api = _api;
-
-        _playerElement = utils.createElement(playerTemplate({ id: _model.get('id') }));
-        if (utils.isIE()) {
-            utils.addClass(_playerElement, 'jw-ie');
-        }
-
-        var width = _model.get('width');
-        var height = _model.get('height');
-
-        _styles(_playerElement, {
-            width: width.toString().indexOf('%') > 0 ? width : (width + 'px'),
-            height: height.toString().indexOf('%') > 0 ? height : (height + 'px')
-        });
-
-        _requestFullscreen =
-            _playerElement.requestFullscreen ||
-            _playerElement.webkitRequestFullscreen ||
-            _playerElement.webkitRequestFullScreen ||
-            _playerElement.mozRequestFullScreen ||
-            _playerElement.msRequestFullscreen;
-        _exitFullscreen =
-            document.exitFullscreen ||
-            document.webkitExitFullscreen ||
-            document.webkitCancelFullScreen ||
-            document.mozCancelFullScreen ||
-            document.msExitFullscreen;
-        _elementSupportsFullscreen = _requestFullscreen && _exitFullscreen;
 
         function reasonInteraction() {
             return { reason: 'interaction' };
@@ -229,7 +218,7 @@ define([
             var containerWidth = Math.round(bounds.width);
             var containerHeight = Math.round(bounds.height);
 
-            _cancelDelayResize(_resizeContainerRequestId);
+            cancelAnimationFrame(_resizeContainerRequestId);
 
             // If the container is the same size as before, return early
             if (containerWidth === _lastWidth && containerHeight === _lastHeight) {
@@ -267,8 +256,8 @@ define([
         }
 
         function _responsiveListener() {
-            _cancelDelayResize(_resizeContainerRequestId);
-            _resizeContainerRequestId = _requestFrame(_setContainerDimensions);
+            cancelAnimationFrame(_resizeContainerRequestId);
+            _resizeContainerRequestId = requestAnimationFrame(_setContainerDimensions);
         }
 
         // Set global colors, used by related plugin
@@ -302,27 +291,6 @@ define([
 
         this.handleColorOverrides = function () {
             var id = _model.get('id');
-
-            function getRgba(color, opacity) {
-                var data;
-
-                if (!_canvasColorContext) {
-                    var canvas = document.createElement('canvas');
-
-                    canvas.height = 1;
-                    canvas.width = 1;
-
-                    _canvasColorContext = canvas.getContext('2d');
-                }
-
-                _canvasColorContext.clearRect(0, 0, 1, 1);
-                _canvasColorContext.fillStyle = color;
-                _canvasColorContext.fillRect(0, 0, 1, 1);
-
-                data = _canvasColorContext.getImageData(0, 0, 1, 1).data;
-
-                return 'rgba(' + data[0] + ', ' + data[1] + ', ' + data[2] + ', ' + opacity + ')';
-            }
 
             function addStyle(elements, attr, value, extendParent) {
                 /* if extendParent is true, bundle the first selector of
@@ -392,10 +360,10 @@ define([
 
                 if (_model.get('timeSliderAbove') !== false) {
                     var backgroundColorGradient = 'transparent linear-gradient(180deg, ' +
-                        getRgba(backgroundColor, 0) + ' 0%, ' +
-                        getRgba(backgroundColor, 0.25) + ' 30%, ' +
-                        getRgba(backgroundColor, 0.4) + ' 70%, ' +
-                        getRgba(backgroundColor, 0.5) + ') 100%';
+                        utils.getRgba(backgroundColor, 0) + ' 0%, ' +
+                        utils.getRgba(backgroundColor, 0.25) + ' 30%, ' +
+                        utils.getRgba(backgroundColor, 0.4) + ' 70%, ' +
+                        utils.getRgba(backgroundColor, 0.5) + ') 100%';
 
                     addStyle([
                         // for small player, set the control bar gradient to the config background color
@@ -413,6 +381,16 @@ define([
         };
 
         this.setup = function () {
+            if (utils.isIE()) {
+                utils.addClass(_playerElement, 'jw-ie');
+            }
+
+            var width = _model.get('width');
+            var height = _model.get('height');
+            _styles(_playerElement, {
+                width: width.toString().indexOf('%') > 0 ? width : (width + 'px'),
+                height: height.toString().indexOf('%') > 0 ? height : (height + 'px')
+            });
 
             this.handleColorOverrides();
 
@@ -501,6 +479,7 @@ define([
             _playerElement.onmousedown = handleMouseDown;
             _playerElement.onmouseup = handleMouseUp;
 
+            this.isSetup = true;
             _model.set('viewSetup', true);
         };
 
@@ -760,13 +739,6 @@ define([
         };
         this.resizeMedia = _resizeMedia;
 
-        this.reset = function () {
-            if (document.contains(_playerElement)) {
-                _playerElement.parentNode.replaceChild(_originalContainer, _playerElement);
-            }
-            utils.emptyElement(_playerElement);
-        };
-
         /**
          * Return whether or not we're in native fullscreen
          */
@@ -829,9 +801,6 @@ define([
 
         function _playlistItemHandler() {
             // update display title
-            if (_castDisplay) {
-                _castDisplay.setState(_model.get('state'));
-            }
             _onMediaTypeChange(_model, _model.mediaModel.get('mediaType'));
             _model.mediaModel.on('change:mediaType', _onMediaTypeChange, this);
         }
@@ -875,7 +844,7 @@ define([
         }
 
         function _updateStateClass() {
-            utils.replaceClass(_playerElement, /jw-state-\S+/, 'jw-state-' + _currentState);
+            utils.replaceClass(_playerElement, /jw-state-\S+/, 'jw-state-' + _playerState);
         }
 
         function _stateHandler(model) {
@@ -883,11 +852,11 @@ define([
                 return;
             }
 
-            _currentState = model.get('state');
+            _playerState = model.get('state');
 
             var instreamState = null;
             if (_instreamModel) {
-                instreamState = _currentState;
+                instreamState = _playerState;
             }
             if (_controls) {
                 _controls.instreamState = instreamState;
@@ -896,14 +865,14 @@ define([
             // Throttle all state change UI updates except for play to prevent iOS 10 animation bug
             clearTimeout(_previewDisplayStateTimeout);
 
-            if (_currentState === states.PLAYING) {
-                _stateUpdate(model, _currentState);
+            if (_playerState === states.PLAYING) {
+                _stateUpdate(model, _playerState);
             } else {
-                _previewDisplayStateTimeout = _requestFrame(function () {
-                    _stateUpdate(model, _currentState);
+                _previewDisplayStateTimeout = requestAnimationFrame(function () {
+                    _stateUpdate(model, _playerState);
                 });
             }
-            if (_currentState !== states.PAUSED && utils.hasClass(_playerElement, 'jw-flag-controls-hidden')) {
+            if (_playerState !== states.PAUSED && utils.hasClass(_playerElement, 'jw-flag-controls-hidden')) {
                 utils.removeClass(_playerElement, 'jw-flag-controls-hidden');
             }
         }
@@ -1021,6 +990,7 @@ define([
         };
 
         this.destroy = function () {
+            this.isSetup = false;
             this.off();
             clearTimeout(_previewDisplayStateTimeout);
             clearTimeout(_resizeMediaTimeout);
@@ -1044,11 +1014,6 @@ define([
             _playerElement.onmousedown = null;
             _playerElement.onmouseup = null;
 
-            if (_castDisplay) {
-                _model.off('change:state', _castDisplay.statusDelegate);
-                _castDisplay.destroy();
-                _castDisplay = null;
-            }
             if (_instreamModel) {
                 this.destroyInstream();
             }
