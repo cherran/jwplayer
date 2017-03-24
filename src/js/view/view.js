@@ -110,6 +110,7 @@ define([
         }
 
         function _setContainerDimensions() {
+            var inDOM = document.body.contains(_playerElement);
             var bounds = _bounds(_playerElement);
             var containerWidth = Math.round(bounds.width);
             var containerHeight = Math.round(bounds.height);
@@ -118,6 +119,10 @@ define([
 
             // If the container is the same size as before, return early
             if (containerWidth === _lastWidth && containerHeight === _lastHeight) {
+                // Listen for player to be added to DOM
+                if (!_lastWidth || !_lastHeight) {
+                    _responsiveListener();
+                }
                 return;
             }
             // If we have bad values for either dimension, return early
@@ -126,14 +131,18 @@ define([
                 if (!_lastWidth || !_lastHeight) {
                     _responsiveListener();
                 }
+                _model.set('inDom', inDOM);
+                // Fire resize 0,0 if the player element is not in the DOM
+                // This allows setup to complete even if element was removed from DOM
+                if (!inDOM) {
+                    _resized(containerWidth, containerHeight);
+                }
                 return;
             }
 
-            _lastWidth = containerWidth;
-            _lastHeight = containerHeight;
-
             _model.set('containerWidth', containerWidth);
             _model.set('containerHeight', containerHeight);
+            _model.set('inDom', inDOM);
 
             var breakPoint = setBreakpoint(_playerElement, containerWidth, containerHeight);
 
@@ -145,6 +154,12 @@ define([
 
             _captionsRenderer.resize();
 
+            _resized(containerWidth, containerHeight);
+        }
+
+        function _resized(containerWidth, containerHeight) {
+            _lastWidth = containerWidth;
+            _lastHeight = containerHeight;
             _this.trigger(events.JWPLAYER_RESIZE, {
                 width: containerWidth,
                 height: containerHeight
@@ -339,8 +354,6 @@ define([
                 window.addEventListener('orientationchange', _responsiveListener, false);
             }
 
-            _model.change('controls', _onChangeControls);
-
             _model.change('flashBlocked', _onChangeFlashBlocked);
 
             _api.onPlaylistComplete(_playlistCompleteHandler);
@@ -376,13 +389,13 @@ define([
 
             this.isSetup = true;
             _model.set('viewSetup', true);
+            _model.set('inDom', document.body.contains(_playerElement));
         };
 
         this.init = function() {
             _resize(_model.get('width'), _model.get('height'));
             _stateHandler(_instreamModel || _model);
-            _lastWidth = 0;
-            _lastHeight = 0;
+            _lastWidth = _lastHeight = null;
             _setContainerDimensions();
         };
 
@@ -441,10 +454,6 @@ define([
             if (bool) {
                 // ignore model that triggered this event and use current state model
                 _stateHandler(_instreamModel || _model);
-                if (_controls) {
-                    var breakPoint = setBreakpoint(_playerElement, _lastWidth, _lastHeight);
-                    _controls.resize(_model, breakPoint);
-                }
             }
 
             utils.toggleClass(_playerElement, 'jw-flag-controls-disabled', !bool);

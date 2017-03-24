@@ -224,6 +224,11 @@ define([
             _model.on('change:viewSetup', function(model, viewSetup) {
                 if (viewSetup) {
                     _this.showView(_view.element());
+                }
+            });
+
+            _model.on('change:inDom', function(model, inDom) {
+                if (inDom) {
                     _observePlayerContainer(_view.element());
 
                     model.off('change:controls', changeControls);
@@ -998,12 +1003,12 @@ define([
         },
 
         showView: function(viewElement) {
-            if (!document.documentElement.contains(this.currentContainer)) {
+            if (!document.body.contains(this.currentContainer)) {
                 // This implies the player was removed from the DOM before setup completed
                 //   or a player has been "re" setup after being removed from the DOM
-                this.currentContainer = document.getElementById(this._model.get('id'));
-                if (!this.currentContainer) {
-                    return;
+                var newContainer = document.getElementById(this._model.get('id'));
+                if (newContainer) {
+                    this.currentContainer = newContainer;
                 }
             }
 
